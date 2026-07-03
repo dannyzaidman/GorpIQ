@@ -17,7 +17,7 @@ from gorpiq.database import (
     upsert_prices,
 )
 from gorpiq.feature_engineering import calculate_features_for_all_tickers
-from gorpiq.utils import ensure_data_directories, normalize_tickers
+from gorpiq.utils import combine_ticker_sources, ensure_data_directories, normalize_tickers
 
 
 st.set_page_config(page_title="GorpIQ", layout="wide")
@@ -67,15 +67,24 @@ def _render_watchlist_download() -> None:
     st.title("Watchlist & Data Download")
     st.warning("Data quality depends on yfinance/Yahoo Finance and may be incomplete or adjusted differently than professional datasets.")
 
-    manual_tickers = st.text_area(
-        "Tickers",
-        value="AAPL, MSFT, NVDA, SPY, QQQ",
-        help="Enter tickers separated by commas, spaces, or new lines.",
+    manual_ticker_text = st.text_area(
+        "Manual tickers",
+        value="",
+        key="manual_ticker_text",
+        placeholder="AAPL, MSFT, NVDA\nSPY QQQ",
+        help="Enter tickers separated by commas, spaces, tabs, or new lines.",
     )
-    uploaded_file = st.file_uploader("Upload watchlist CSV", type=["csv"])
+    uploaded_file = st.file_uploader("Upload watchlist CSV", type=["csv"], key="watchlist_csv_upload")
 
     uploaded_tickers = _read_uploaded_watchlist(uploaded_file)
-    tickers = normalize_tickers(manual_tickers) + [t for t in uploaded_tickers if t not in normalize_tickers(manual_tickers)]
+    tickers = combine_ticker_sources(manual_ticker_text, uploaded_tickers)
+
+    st.subheader("Parsed Watchlist")
+    if tickers:
+        st.write(f"{len(tickers):,} tickers parsed")
+        st.write(", ".join(tickers))
+    else:
+        st.warning("Enter tickers manually or upload a CSV watchlist before downloading data.")
 
     today = date.today()
     default_start = today - timedelta(days=365 * 2)
@@ -85,11 +94,9 @@ def _render_watchlist_download() -> None:
     with col_end:
         end_date = st.date_input("End date", value=today)
 
-    st.write("Normalized watchlist:", ", ".join(tickers) if tickers else "None")
-
     if st.button("Download and store daily prices", type="primary"):
         if not tickers:
-            st.error("Enter at least one ticker.")
+            st.error("Enter at least one ticker manually or upload a CSV watchlist.")
         elif start_date >= end_date:
             st.error("Start date must be before end date.")
         else:
@@ -112,11 +119,14 @@ def _render_watchlist_download() -> None:
         st.dataframe(summary, width="stretch", hide_index=True)
 
     st.subheader("Stored OHLCV preview")
-    stored = load_prices(tickers=tickers or None, start_date=start_date, end_date=end_date)
-    if stored.empty:
-        st.info("No stored rows match the current filters.")
+    if not tickers:
+        st.info("Parsed watchlist rows will appear here after you enter or upload tickers.")
     else:
-        st.dataframe(stored.tail(500), width="stretch", hide_index=True)
+        stored = load_prices(tickers=tickers, start_date=start_date, end_date=end_date)
+        if stored.empty:
+            st.info("No stored rows match the current parsed watchlist and date filters.")
+        else:
+            st.dataframe(stored.tail(500), width="stretch", hide_index=True)
 
 
 def _render_feature_calculation() -> None:
