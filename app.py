@@ -35,6 +35,38 @@ def _read_uploaded_watchlist(uploaded_file) -> list[str]:
     return normalize_tickers(frame[ticker_column].dropna().astype(str).tolist())
 
 
+def _recent_price_rows_by_ticker(prices: pd.DataFrame, rows_per_ticker: int = 20) -> pd.DataFrame:
+    """Return recent price rows for each ticker, sorted for cross-ticker scanning."""
+    if prices.empty:
+        return prices
+
+    recent = (
+        prices.sort_values(["ticker", "date"])
+        .groupby("ticker", group_keys=False)
+        .tail(rows_per_ticker)
+        .sort_values(["date", "ticker"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    return recent
+
+
+def _render_price_row_counts(prices: pd.DataFrame, expected_tickers: list[str]) -> None:
+    if prices.empty:
+        return
+
+    counts = prices.groupby("ticker").size().rename("rows").reset_index()
+    st.dataframe(counts, width="stretch", hide_index=True)
+
+    returned_tickers = set(counts["ticker"])
+    missing_tickers = [ticker for ticker in expected_tickers if ticker not in returned_tickers]
+    if missing_tickers:
+        st.warning(
+            "No price rows were returned for: "
+            + ", ".join(missing_tickers)
+            + ". This can happen if Yahoo Finance does not recognize a symbol or has no data for the selected dates."
+        )
+
+
 def _render_overview() -> None:
     st.title("GorpIQ")
     st.caption("Local swing-trade research and decision support")
@@ -118,7 +150,11 @@ def _render_watchlist_download() -> None:
             else:
                 rows_written = upsert_prices(prices)
                 st.success(f"Stored {rows_written:,} daily price rows.")
-                st.dataframe(prices.tail(200), width="stretch", hide_index=True)
+                st.subheader("Downloaded rows by ticker")
+                _render_price_row_counts(prices, tickers)
+                st.subheader("Downloaded OHLCV preview")
+                st.caption("Showing recent rows for each ticker, not just the last ticker alphabetically.")
+                st.dataframe(_recent_price_rows_by_ticker(prices), width="stretch", hide_index=True)
 
     st.subheader("Stored price coverage")
     summary = get_price_summary()
@@ -138,7 +174,9 @@ def _render_watchlist_download() -> None:
                 "Click “Download and store daily prices” to fetch them."
             )
         else:
-            st.dataframe(stored.tail(500), width="stretch", hide_index=True)
+            st.caption("Showing recent stored rows for each ticker in the parsed watchlist.")
+            _render_price_row_counts(stored, tickers)
+            st.dataframe(_recent_price_rows_by_ticker(stored), width="stretch", hide_index=True)
 
 
 def _render_feature_calculation() -> None:
