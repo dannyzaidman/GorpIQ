@@ -24,6 +24,40 @@ PRICE_COLUMNS = [
     "data_source",
 ]
 
+FEATURE_COLUMNS = [
+    "date",
+    "ticker",
+    "Return_1d",
+    "Return_2d",
+    "Return_3d",
+    "Return_5d",
+    "Return_10d",
+    "Return_15d",
+    "Return_20d",
+    "Return_30d",
+    "Return_50d",
+    "Return_100d",
+    "Return_200d",
+    "Return_YTD",
+    "SMA_10",
+    "SMA_20",
+    "SMA_50",
+    "SMA_100",
+    "SMA_200",
+    "Distance_SMA_10",
+    "Distance_SMA_20",
+    "Distance_SMA_50",
+    "Distance_SMA_100",
+    "Distance_SMA_200",
+    "RSI_5",
+    "RSI_14",
+    "RSI_21",
+    "ATR_14",
+    "ATR_20",
+    "ATR_Pct_14",
+    "ATR_Pct_20",
+]
+
 DISCLAIMER_TEXT = (
     "GorpIQ is for personal education and decision support only. "
     "It is not financial advice, does not guarantee results, and must not be "

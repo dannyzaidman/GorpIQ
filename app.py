@@ -8,11 +8,15 @@ import streamlit as st
 from gorpiq.config import DB_PATH, DISCLAIMER_TEXT
 from gorpiq.data_provider import YFinanceDataProvider
 from gorpiq.database import (
+    get_feature_summary,
     get_price_summary,
     initialize_database,
+    load_features,
     load_prices,
+    upsert_features,
     upsert_prices,
 )
+from gorpiq.feature_engineering import calculate_features_for_all_tickers
 from gorpiq.utils import ensure_data_directories, normalize_tickers
 
 
@@ -37,14 +41,15 @@ def _render_overview() -> None:
 
     st.warning(DISCLAIMER_TEXT)
 
-    st.subheader("Current first-build workflow")
+    st.subheader("Current MVP workflow")
     st.markdown(
         """
         1. Enter or upload a watchlist.
         2. Choose a historical date range.
         3. Download daily OHLCV data from Yahoo Finance through yfinance.
         4. Store the normalized data in local SQLite.
-        5. Inspect the downloaded data and ticker coverage.
+        5. Calculate initial historical technical features.
+        6. Inspect stored price and feature coverage.
         """
     )
 
@@ -114,6 +119,93 @@ def _render_watchlist_download() -> None:
         st.dataframe(stored.tail(500), width="stretch", hide_index=True)
 
 
+def _render_feature_calculation() -> None:
+    st.title("Feature Calculation")
+    st.warning(
+        "Initial MVP features use only each ticker's current and prior daily rows. "
+        "ATR uses stored unadjusted high, low, and close because adjusted OHLC fields are not stored yet."
+    )
+
+    price_summary = get_price_summary()
+    if price_summary.empty:
+        st.info("Download daily prices before calculating features.")
+        return
+
+    available_tickers = price_summary["ticker"].tolist()
+    selected_tickers = st.multiselect("Tickers", available_tickers, default=available_tickers)
+
+    first_available = pd.to_datetime(price_summary["first_date"]).min().date()
+    last_available = pd.to_datetime(price_summary["last_date"]).max().date()
+    col_start, col_end = st.columns(2)
+    with col_start:
+        start_date = st.date_input("Feature start date", value=first_available, min_value=first_available, max_value=last_available)
+    with col_end:
+        end_date = st.date_input("Feature end date", value=last_available, min_value=first_available, max_value=last_available)
+
+    if st.button("Calculate initial MVP features", type="primary"):
+        if not selected_tickers:
+            st.error("Select at least one ticker.")
+        elif start_date > end_date:
+            st.error("Start date must be on or before end date.")
+        else:
+            with st.spinner("Calculating features from stored price history..."):
+                price_history = load_prices(tickers=selected_tickers, end_date=end_date)
+                all_features = calculate_features_for_all_tickers(price_history)
+                if all_features.empty:
+                    filtered_features = all_features
+                else:
+                    filtered_features = all_features[
+                        (all_features["date"].dt.date >= start_date)
+                        & (all_features["date"].dt.date <= end_date)
+                    ].reset_index(drop=True)
+                rows_written = upsert_features(filtered_features)
+
+            st.success(
+                f"Processed {len(selected_tickers):,} tickers and created/updated "
+                f"{rows_written:,} feature rows for {start_date} through {end_date}."
+            )
+
+    st.subheader("Stored feature coverage")
+    feature_summary = get_feature_summary()
+    if feature_summary.empty:
+        st.info("No stored features yet.")
+    else:
+        st.dataframe(feature_summary, width="stretch", hide_index=True)
+
+    st.subheader("Feature preview")
+    features = load_features(tickers=selected_tickers or None, start_date=start_date, end_date=end_date)
+    if features.empty:
+        st.info("No stored feature rows match the current filters.")
+        return
+
+    st.dataframe(features.tail(500), width="stretch", hide_index=True)
+
+    st.subheader("Missing values by feature")
+    feature_value_columns = [column for column in features.columns if column not in {"date", "ticker", "created_at", "updated_at"}]
+    missing_counts = (
+        features[feature_value_columns]
+        .isna()
+        .sum()
+        .rename("missing_values")
+        .reset_index()
+        .rename(columns={"index": "feature"})
+    )
+    missing_counts = missing_counts[missing_counts["missing_values"] > 0].sort_values(
+        ["missing_values", "feature"], ascending=[False, True]
+    )
+    if missing_counts.empty:
+        st.success("No missing values in the current feature view.")
+    else:
+        st.dataframe(missing_counts, width="stretch", hide_index=True)
+
+    st.download_button(
+        "Export features to CSV",
+        data=features.to_csv(index=False).encode("utf-8"),
+        file_name="gorpiq_features.csv",
+        mime="text/csv",
+    )
+
+
 def _render_placeholder_page(title: str, description: str) -> None:
     st.title(title)
     st.info(description)
@@ -143,7 +235,7 @@ def main() -> None:
     elif page == "Watchlist & Data Download":
         _render_watchlist_download()
     elif page == "Feature Calculation":
-        _render_placeholder_page("Feature Calculation", "Feature generation will be added after the data ingestion foundation.")
+        _render_feature_calculation()
     elif page == "Label Generation":
         _render_placeholder_page("Label Generation", "Forward-looking labels will be generated only for backtesting and never used as current-day features.")
     elif page == "Backtest":
