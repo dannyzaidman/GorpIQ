@@ -67,22 +67,31 @@ def _render_watchlist_download() -> None:
     st.title("Watchlist & Data Download")
     st.warning("Data quality depends on yfinance/Yahoo Finance and may be incomplete or adjusted differently than professional datasets.")
 
+    st.subheader("Manual Watchlist")
     manual_ticker_text = st.text_area(
-        "Manual tickers",
+        "Ticker symbols",
         value="",
         key="manual_ticker_text",
-        placeholder="AAPL, MSFT, NVDA\nSPY QQQ",
-        help="Enter tickers separated by commas, spaces, tabs, or new lines.",
+        placeholder="JPM\nAAPL, MSFT, NVDA\nSPY QQQ",
+        help="Type one ticker or many tickers. Separate them with commas, spaces, tabs, or new lines.",
+        height=110,
     )
-    uploaded_file = st.file_uploader("Upload watchlist CSV", type=["csv"], key="watchlist_csv_upload")
+
+    st.subheader("CSV Watchlist Upload")
+    st.caption("Optional. Upload a CSV with a `ticker` column, or use the first column as ticker symbols.")
+    uploaded_file = st.file_uploader(
+        "Choose watchlist CSV",
+        type=["csv"],
+        key="watchlist_csv_upload",
+    )
 
     uploaded_tickers = _read_uploaded_watchlist(uploaded_file)
     tickers = combine_ticker_sources(manual_ticker_text, uploaded_tickers)
 
     st.subheader("Parsed Watchlist")
     if tickers:
-        st.write(f"{len(tickers):,} tickers parsed")
-        st.write(", ".join(tickers))
+        st.success(f"{len(tickers):,} tickers parsed. Click the download button below to fetch price data.")
+        st.code(", ".join(tickers), language=None)
     else:
         st.warning("Enter tickers manually or upload a CSV watchlist before downloading data.")
 
@@ -124,7 +133,10 @@ def _render_watchlist_download() -> None:
     else:
         stored = load_prices(tickers=tickers, start_date=start_date, end_date=end_date)
         if stored.empty:
-            st.info("No stored rows match the current parsed watchlist and date filters.")
+            st.info(
+                "The parsed tickers are ready, but no stored OHLCV rows match this watchlist and date range yet. "
+                "Click “Download and store daily prices” to fetch them."
+            )
         else:
             st.dataframe(stored.tail(500), width="stretch", hide_index=True)
 
