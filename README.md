@@ -1,6 +1,6 @@
 # GorpIQ
 
-GorpIQ is a local Streamlit app for personal stock trading research and decision support. The current build supports watchlist entry, daily OHLCV download through yfinance, local SQLite storage, inspection of downloaded data, initial feature engineering, and forward-looking label generation for historical backtesting.
+GorpIQ is a local Streamlit app for personal stock trading research and decision support. The current build supports watchlist entry, daily OHLCV download through yfinance, local SQLite storage, inspection of downloaded data, initial feature engineering, forward-looking label generation, and an initial historical backtesting engine.
 
 This is not financial advice, not an auto-trading system, and not a broker integration. It does not place trades. Past performance does not guarantee future results.
 
@@ -24,11 +24,16 @@ This is not financial advice, not an auto-trading system, and not a broker integ
   - days to future peak and max drawdown
   - +5%, +10%, +15%, -5%, and -10% threshold outcomes
 - Shows stored label coverage, label previews, missing-value counts, and CSV export.
-- Provides shell pages for the planned backtest, screener, trade tracker, and sell alert modules.
+- Runs an initial historical backtest that:
+  - scores candidates from same-day feature rows
+  - selects the top N candidates per date
+  - evaluates selected trades with stored forward-looking labels
+  - compares selected future returns against SPY benchmark returns
+  - exports selected-trade results to CSV
+- Provides shell pages for the planned screener, trade tracker, and sell alert modules.
 
 ## What It Does Not Do Yet
 
-- Run backtests.
 - Rank current candidates.
 - Log trades.
 - Generate sell alerts.
@@ -68,13 +73,39 @@ Open the `Label Generation` page after downloading price history. Select tickers
 
 Labels intentionally use future adjusted close data. They are stored in `labels_daily` as historical outcomes for backtesting only. Do not use label columns as current-day features, screener inputs, or trading signals.
 
+## Run An Initial Backtest
+
+Before running a backtest, download candidate ticker data and SPY data, calculate features, and generate labels. Open the `Backtest` page, choose candidate tickers, a date range, holding period, top N candidates per date, and minimum score threshold. Then select `Run initial backtest`.
+
+SPY is required as the benchmark. By default, SPY is excluded from candidate ranking even if it exists in the database.
+
+## Scoring Model V1
+
+The first scoring model is transparent and experimental. It does not use machine learning. It calculates a 0-100 `TotalScore` from:
+
+- momentum percentiles from recent trailing returns
+- trend and moving-average structure
+- RSI overextension penalties
+- ATR percent volatility/risk percentiles
+
+The initial weights are:
+
+- Momentum: 35%
+- Trend / moving average: 35%
+- Mean reversion / overextension: 15%
+- Volatility / risk: 15%
+
+The backtest reports selected trade returns, SPY benchmark returns, excess returns versus SPY, win rate, probability of reaching selected thresholds, average max return/drawdown, best trade, worst trade, and selected-trade detail with reason codes.
+
 ## Key Limitations
 
 - Yahoo/yfinance data may be incomplete, delayed, unavailable, or adjusted differently than professional datasets.
 - Using today's stock universe for historical testing can introduce survivorship bias.
-- Later backtests must avoid using future data in features.
+- Backtests using today's watchlist as the historical universe may suffer from survivorship bias.
+- Backtests must avoid using future data in features.
 - Forward-looking labels are for historical testing only and must never be used as current-day features.
+- The scoring model is experimental and should not be treated as a trading system or financial advice.
 
 ## Next Build Step
 
-Add a simple backtesting page that uses historical features, scores/rules, and stored labels to evaluate candidate selection against future outcomes.
+Expand the feature engineering module to include relative strength, volume confirmation, breakout/pullback features, market regime, and sector regime.

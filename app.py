@@ -5,6 +5,13 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from gorpiq.backtester import (
+    HOLDING_PERIOD_LABELS,
+    load_backtest_dataset,
+    run_backtest,
+    summarize_backtest_results,
+    summary_to_frame,
+)
 from gorpiq.config import DB_PATH, DISCLAIMER_TEXT
 from gorpiq.data_provider import YFinanceDataProvider
 from gorpiq.database import (
@@ -369,6 +376,113 @@ def _render_label_generation() -> None:
     )
 
 
+def _render_backtest() -> None:
+    st.title("Backtest")
+    st.warning(
+        "This initial backtest is experimental. It scores historical feature rows and uses labels only as future "
+        "outcomes. Results may suffer from survivorship bias if today's watchlist is used as the historical universe."
+    )
+
+    price_summary = get_price_summary()
+    if price_summary.empty:
+        st.info("Download price data before running a backtest.")
+        return
+
+    available_tickers = sorted(price_summary["ticker"].unique().tolist())
+    default_candidates = [ticker for ticker in available_tickers if ticker != "SPY"]
+    selected_tickers = st.multiselect(
+        "Candidate tickers",
+        available_tickers,
+        default=default_candidates,
+        key="backtest_tickers",
+    )
+
+    first_available = pd.to_datetime(price_summary["first_date"]).min().date()
+    last_available = pd.to_datetime(price_summary["last_date"]).max().date()
+    col_start, col_end = st.columns(2)
+    with col_start:
+        start_date = st.date_input(
+            "Backtest start date",
+            value=first_available,
+            min_value=first_available,
+            max_value=last_available,
+            key="backtest_start_date",
+        )
+    with col_end:
+        end_date = st.date_input(
+            "Backtest end date",
+            value=last_available,
+            min_value=first_available,
+            max_value=last_available,
+            key="backtest_end_date",
+        )
+
+    col_period, col_top_n, col_threshold = st.columns(3)
+    with col_period:
+        holding_period = st.selectbox("Holding period", list(HOLDING_PERIOD_LABELS.keys()), index=2, format_func=lambda x: f"{x} trading days")
+    with col_top_n:
+        top_n = st.number_input("Top N candidates per date", min_value=1, max_value=50, value=3, step=1)
+    with col_threshold:
+        minimum_score = st.number_input("Minimum score threshold", min_value=0.0, max_value=100.0, value=0.0, step=5.0)
+
+    include_spy_as_candidate = st.checkbox("Include SPY as candidate", value=False)
+    st.checkbox("Market regime filter", value=False, disabled=True, help="Coming soon.")
+
+    if st.button("Run initial backtest", type="primary"):
+        if not selected_tickers:
+            st.error("Select at least one candidate ticker.")
+            return
+        if start_date > end_date:
+            st.error("Start date must be on or before end date.")
+            return
+
+        with st.spinner("Loading features, labels, and SPY benchmark returns..."):
+            features, labels, spy_returns, validation = load_backtest_dataset(
+                tickers=selected_tickers,
+                start_date=start_date,
+                end_date=end_date,
+                holding_period=int(holding_period),
+                include_spy_as_candidate=include_spy_as_candidate,
+            )
+
+        if not validation.is_valid:
+            for message in validation.messages:
+                st.error(message)
+            return
+
+        with st.spinner("Scoring candidates and selecting historical trades..."):
+            results = run_backtest(
+                features_df=features,
+                labels_df=labels,
+                spy_returns_df=spy_returns,
+                holding_period=int(holding_period),
+                top_n=int(top_n),
+                minimum_score=float(minimum_score),
+            )
+
+        if results.empty:
+            st.warning("No selected trades remained after scoring, label availability, and SPY benchmark filtering.")
+            return
+
+        summary = summarize_backtest_results(results)
+        st.subheader("Summary metrics")
+        st.dataframe(summary_to_frame(summary), width="stretch", hide_index=True)
+
+        chart_df = results.sort_values("date").copy()
+        chart_df["CumulativeAverageExcessReturn"] = chart_df["ExcessReturnVsSPY"].expanding().mean()
+        st.subheader("Cumulative average excess return")
+        st.line_chart(chart_df.set_index("date")["CumulativeAverageExcessReturn"])
+
+        st.subheader("Selected trades")
+        st.dataframe(results, width="stretch", hide_index=True)
+        st.download_button(
+            "Export backtest results to CSV",
+            data=results.to_csv(index=False).encode("utf-8"),
+            file_name="gorpiq_backtest_results.csv",
+            mime="text/csv",
+        )
+
+
 def _render_placeholder_page(title: str, description: str) -> None:
     st.title(title)
     st.info(description)
@@ -402,7 +516,7 @@ def main() -> None:
     elif page == "Label Generation":
         _render_label_generation()
     elif page == "Backtest":
-        _render_placeholder_page("Backtest", "Backtesting will rank historical candidates and compare selected forward returns against SPY.")
+        _render_backtest()
     elif page == "Current Screener":
         _render_placeholder_page("Current Screener", "Current ranking will appear after MVP features and transparent scoring are implemented.")
     elif page == "Trade Tracker":
