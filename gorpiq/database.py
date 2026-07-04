@@ -8,7 +8,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from gorpiq.config import DB_PATH, DEFAULT_DATA_SOURCE, FEATURE_COLUMNS, PRICE_COLUMNS
+from gorpiq.config import DB_PATH, DEFAULT_DATA_SOURCE, FEATURE_COLUMNS, LABEL_COLUMNS, PRICE_COLUMNS
 
 
 def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -60,6 +60,25 @@ def initialize_database(db_path: Path = DB_PATH) -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_features_daily_ticker_date
             ON features_daily (ticker, date)
+            """
+        )
+        label_column_sql = ",\n                ".join(f'"{column}" REAL' for column in LABEL_COLUMNS if column not in {"date", "ticker"})
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS labels_daily (
+                date TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                {label_column_sql},
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (date, ticker)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_labels_daily_ticker_date
+            ON labels_daily (ticker, date)
             """
         )
 
@@ -245,6 +264,99 @@ def get_feature_summary(db_path: Path = DB_PATH) -> pd.DataFrame:
                 MAX(date) AS last_date,
                 COUNT(*) AS rows
             FROM features_daily
+            GROUP BY ticker
+            ORDER BY ticker
+            """,
+            connection,
+        )
+
+
+def upsert_labels(labels: pd.DataFrame, db_path: Path = DB_PATH) -> int:
+    if labels.empty:
+        return 0
+
+    missing_columns = sorted(set(LABEL_COLUMNS) - set(labels.columns))
+    if missing_columns:
+        raise ValueError(f"Label data is missing required columns: {missing_columns}")
+
+    prepared = labels.loc[:, LABEL_COLUMNS].copy()
+    prepared["date"] = pd.to_datetime(prepared["date"]).dt.date.astype(str)
+    prepared["ticker"] = prepared["ticker"].astype(str).str.upper().str.strip()
+
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    prepared["created_at"] = now
+    prepared["updated_at"] = now
+    prepared = prepared.replace({np.nan: None})
+
+    insert_columns = LABEL_COLUMNS + ["created_at", "updated_at"]
+    placeholders = ", ".join(f":{column}" for column in insert_columns)
+    quoted_columns = ", ".join(f'"{column}"' for column in insert_columns)
+    update_columns = [column for column in LABEL_COLUMNS if column not in {"date", "ticker"}] + ["updated_at"]
+    update_clause = ",\n                ".join(f'"{column}" = excluded."{column}"' for column in update_columns)
+
+    records = prepared.to_dict("records")
+    with connect(db_path) as connection:
+        connection.executemany(
+            f"""
+            INSERT INTO labels_daily ({quoted_columns})
+            VALUES ({placeholders})
+            ON CONFLICT(date, ticker) DO UPDATE SET
+                {update_clause}
+            """,
+            records,
+        )
+    return len(records)
+
+
+def load_labels(
+    tickers: Iterable[str] | None = None,
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+    db_path: Path = DB_PATH,
+) -> pd.DataFrame:
+    initialize_database(db_path)
+    clauses: list[str] = []
+    params: list[str] = []
+
+    if tickers:
+        normalized = [ticker.upper().strip() for ticker in tickers if ticker and ticker.strip()]
+        if normalized:
+            placeholders = ",".join("?" for _ in normalized)
+            clauses.append(f"ticker IN ({placeholders})")
+            params.extend(normalized)
+
+    if start_date:
+        clauses.append("date >= ?")
+        params.append(str(start_date))
+
+    if end_date:
+        clauses.append("date <= ?")
+        params.append(str(end_date))
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    selected_columns = ", ".join(f'"{column}"' for column in LABEL_COLUMNS + ["created_at", "updated_at"])
+    query = f"""
+        SELECT {selected_columns}
+        FROM labels_daily
+        {where_clause}
+        ORDER BY ticker, date
+    """
+
+    with connect(db_path) as connection:
+        return pd.read_sql_query(query, connection, params=params, parse_dates=["date"])
+
+
+def get_label_summary(db_path: Path = DB_PATH) -> pd.DataFrame:
+    initialize_database(db_path)
+    with connect(db_path) as connection:
+        return pd.read_sql_query(
+            """
+            SELECT
+                ticker,
+                MIN(date) AS first_date,
+                MAX(date) AS last_date,
+                COUNT(*) AS rows
+            FROM labels_daily
             GROUP BY ticker
             ORDER BY ticker
             """,

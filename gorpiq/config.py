@@ -58,6 +58,27 @@ FEATURE_COLUMNS = [
     "ATR_Pct_20",
 ]
 
+LABEL_COLUMNS = [
+    "date",
+    "ticker",
+    "FutureReturn_2d",
+    "FutureReturn_3d",
+    "FutureReturn_5d",
+    "FutureReturn_10d",
+    "FutureReturn_15d",
+    "FutureReturn_20d",
+    "FutureReturn_30d",
+    "FutureMaxReturn_30d",
+    "FutureMaxDrawdown_30d",
+    "FutureDaysToPeak_30d",
+    "FutureDaysToMaxDrawdown_30d",
+    "Reached_5pct_Before_30d",
+    "Reached_10pct_Before_30d",
+    "Reached_15pct_Before_30d",
+    "Hit_Negative_5pct_Before_30d",
+    "Hit_Negative_10pct_Before_30d",
+]
+
 DISCLAIMER_TEXT = (
     "GorpIQ is for personal education and decision support only. "
     "It is not financial advice, does not guarantee results, and must not be "

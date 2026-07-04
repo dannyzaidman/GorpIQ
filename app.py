@@ -9,14 +9,18 @@ from gorpiq.config import DB_PATH, DISCLAIMER_TEXT
 from gorpiq.data_provider import YFinanceDataProvider
 from gorpiq.database import (
     get_feature_summary,
+    get_label_summary,
     get_price_summary,
     initialize_database,
     load_features,
+    load_labels,
     load_prices,
     upsert_features,
+    upsert_labels,
     upsert_prices,
 )
 from gorpiq.feature_engineering import calculate_features_for_all_tickers
+from gorpiq.label_generator import calculate_labels_for_all_tickers
 from gorpiq.utils import combine_ticker_sources, ensure_data_directories, normalize_tickers
 
 
@@ -266,6 +270,105 @@ def _render_feature_calculation() -> None:
     )
 
 
+def _render_label_generation() -> None:
+    st.title("Label Generation")
+    st.warning(
+        "Forward-looking labels use future adjusted-close data. They are historical outcomes for backtesting only "
+        "and must never be used as current-day input features or screener signals."
+    )
+
+    price_summary = get_price_summary()
+    if price_summary.empty:
+        st.info("Download daily prices before generating labels.")
+        return
+
+    available_tickers = price_summary["ticker"].tolist()
+    selected_tickers = st.multiselect("Tickers", available_tickers, default=available_tickers, key="label_tickers")
+
+    first_available = pd.to_datetime(price_summary["first_date"]).min().date()
+    last_available = pd.to_datetime(price_summary["last_date"]).max().date()
+    col_start, col_end = st.columns(2)
+    with col_start:
+        start_date = st.date_input(
+            "Label start date",
+            value=first_available,
+            min_value=first_available,
+            max_value=last_available,
+            key="label_start_date",
+        )
+    with col_end:
+        end_date = st.date_input(
+            "Label end date",
+            value=last_available,
+            min_value=first_available,
+            max_value=last_available,
+            key="label_end_date",
+        )
+
+    if st.button("Generate forward-looking labels", type="primary"):
+        if not selected_tickers:
+            st.error("Select at least one ticker.")
+        elif start_date > end_date:
+            st.error("Start date must be on or before end date.")
+        else:
+            with st.spinner("Generating forward-looking labels from stored adjusted-close history..."):
+                price_history = load_prices(tickers=selected_tickers)
+                all_labels = calculate_labels_for_all_tickers(price_history)
+                if all_labels.empty:
+                    filtered_labels = all_labels
+                else:
+                    filtered_labels = all_labels[
+                        (all_labels["date"].dt.date >= start_date)
+                        & (all_labels["date"].dt.date <= end_date)
+                    ].reset_index(drop=True)
+                rows_written = upsert_labels(filtered_labels)
+
+            st.success(
+                f"Processed {len(selected_tickers):,} tickers and created/updated "
+                f"{rows_written:,} label rows for {start_date} through {end_date}."
+            )
+
+    st.subheader("Stored label coverage")
+    label_summary = get_label_summary()
+    if label_summary.empty:
+        st.info("No stored labels yet.")
+    else:
+        st.dataframe(label_summary, width="stretch", hide_index=True)
+
+    st.subheader("Label preview")
+    labels = load_labels(tickers=selected_tickers or None, start_date=start_date, end_date=end_date)
+    if labels.empty:
+        st.info("No stored label rows match the current filters.")
+        return
+
+    st.dataframe(labels.tail(500), width="stretch", hide_index=True)
+
+    st.subheader("Missing values by label")
+    label_value_columns = [column for column in labels.columns if column not in {"date", "ticker", "created_at", "updated_at"}]
+    missing_counts = (
+        labels[label_value_columns]
+        .isna()
+        .sum()
+        .rename("missing_values")
+        .reset_index()
+        .rename(columns={"index": "label"})
+    )
+    missing_counts = missing_counts[missing_counts["missing_values"] > 0].sort_values(
+        ["missing_values", "label"], ascending=[False, True]
+    )
+    if missing_counts.empty:
+        st.success("No missing values in the current label view.")
+    else:
+        st.dataframe(missing_counts, width="stretch", hide_index=True)
+
+    st.download_button(
+        "Export labels to CSV",
+        data=labels.to_csv(index=False).encode("utf-8"),
+        file_name="gorpiq_labels.csv",
+        mime="text/csv",
+    )
+
+
 def _render_placeholder_page(title: str, description: str) -> None:
     st.title(title)
     st.info(description)
@@ -297,7 +400,7 @@ def main() -> None:
     elif page == "Feature Calculation":
         _render_feature_calculation()
     elif page == "Label Generation":
-        _render_placeholder_page("Label Generation", "Forward-looking labels will be generated only for backtesting and never used as current-day features.")
+        _render_label_generation()
     elif page == "Backtest":
         _render_placeholder_page("Backtest", "Backtesting will rank historical candidates and compare selected forward returns against SPY.")
     elif page == "Current Screener":
